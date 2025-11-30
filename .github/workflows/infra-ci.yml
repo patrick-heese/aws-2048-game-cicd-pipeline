@@ -1,0 +1,27 @@
+name: infra-ci
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/infra-ci.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: infra-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    uses: patrick-heese/aws-iac-quality-gate/.github/workflows/reusable-iac-gate.yml@v1
+    with:
+      iac_tool: terraform
+      working_directory: terraform
+      aws_region: us-east-1
+      aws_role_arn: arn:aws:iam::493233983993:role/GitHubOIDC-Infra
+      apply: false

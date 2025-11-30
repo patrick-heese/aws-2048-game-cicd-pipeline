@@ -3,6 +3,7 @@ version: 0.2
 phases:
   pre_build:
     commands:
+      - cd 2048-game
       - echo Logging in to Amazon ECR...
       - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REPO_URI"
   build:
@@ -19,5 +20,6 @@ phases:
       - printf '[{"name":"%s","imageUri":"%s:latest"}]' "$CONTAINER_NAME" "$ECR_REPO_URI" > imagedefinitions.json
 
 artifacts:
+  base-directory: 2048-game
   files:
     - imagedefinitions.json

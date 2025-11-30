@@ -1,12 +1,3 @@
-locals {
-  name = var.project_name
-  tags = { Project = var.project_name }
-}
-
-# Helpers
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
 # -----------------------------
 # Default VPC + Subnets
 # -----------------------------
@@ -22,7 +13,7 @@ data "aws_subnets" "default_vpc" {
 }
 
 resource "aws_security_group" "allow_http" {
-  name        = "${local.name}-allow-http"
+  name        = "${var.project_name}-allow-http"
   description = "Allow HTTP inbound"
   vpc_id      = data.aws_vpc.default.id
 
@@ -41,39 +32,34 @@ resource "aws_security_group" "allow_http" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags = local.tags
 }
 
 # -----------------------------
 # ECR
 # -----------------------------
 resource "aws_ecr_repository" "repo" {
-  name                 = "${local.name}-repo"
+  name                 = "${var.project_name}-repo"
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration { scan_on_push = true }
-  tags = local.tags
 }
 
 # -----------------------------
 # Logs
 # -----------------------------
 resource "aws_cloudwatch_log_group" "ecs" {
-  name              = "/ecs/${local.name}"
+  name              = "/ecs/${var.project_name}"
   retention_in_days = 14
-  tags              = local.tags
 }
 
 # -----------------------------
 # ECS Cluster
 # -----------------------------
 resource "aws_ecs_cluster" "cluster" {
-  name = "${local.name}-cluster"
+  name = "${var.project_name}-cluster"
   setting {
     name  = "containerInsights"
     value = "enabled"
   }
-  tags = local.tags
 }
 
 # -----------------------------
@@ -90,9 +76,8 @@ data "aws_iam_policy_document" "ecs_task_assume" {
 }
 
 resource "aws_iam_role" "task_execution" {
-  name               = "${local.name}-task-exec"
+  name               = "${var.project_name}-task-exec"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
-  tags               = local.tags
 }
 
 resource "aws_iam_role_policy_attachment" "task_exec_managed" {
@@ -101,16 +86,15 @@ resource "aws_iam_role_policy_attachment" "task_exec_managed" {
 }
 
 resource "aws_iam_role" "task_role" {
-  name               = "${local.name}-task"
+  name               = "${var.project_name}-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
-  tags               = local.tags
 }
 
 # -----------------------------
 # Task Definition (Fargate)
 # -----------------------------
 resource "aws_ecs_task_definition" "td" {
-  family                   = "${local.name}-taskdef"
+  family                   = "${var.project_name}-taskdef"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = var.cpu
@@ -133,7 +117,7 @@ resource "aws_ecs_task_definition" "td" {
         logDriver = "awslogs"
         options = {
           awslogs-group         = aws_cloudwatch_log_group.ecs.name
-          awslogs-region        = var.region
+          awslogs-region        = var.aws_region
           awslogs-stream-prefix = "ecs"
         }
       }
@@ -144,15 +128,13 @@ resource "aws_ecs_task_definition" "td" {
     operating_system_family = "LINUX"
     cpu_architecture        = "X86_64"
   }
-
-  tags = local.tags
 }
 
 # -----------------------------
 # ECS Service (Public IP, no ALB)
 # -----------------------------
 resource "aws_ecs_service" "svc" {
-  name            = "${local.name}-service"
+  name            = "${var.project_name}-service"
   cluster         = aws_ecs_cluster.cluster.id
   task_definition = aws_ecs_task_definition.td.arn
   desired_count   = 1
@@ -167,7 +149,6 @@ resource "aws_ecs_service" "svc" {
   # Allow CodePipeline to roll task defs without TF drift
   lifecycle { ignore_changes = [task_definition] }
 
-  tags = local.tags
 }
 
 # -----------------------------
@@ -178,13 +159,12 @@ resource "random_id" "suffix" {
 }
 
 locals {
-  artifacts_bucket_name = var.artifact_bucket_suffix != "" ? "${local.name}-artifacts-${var.artifact_bucket_suffix}" : "${local.name}-artifacts-${random_id.suffix.hex}"
+  artifacts_bucket_name = var.artifact_bucket_suffix != "" ? "${var.project_name}-artifacts-${var.artifact_bucket_suffix}" : "${var.project_name}-artifacts-${random_id.suffix.hex}"
 }
 
 resource "aws_s3_bucket" "artifacts" {
   bucket        = local.artifacts_bucket_name
   force_destroy = true
-  tags          = local.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "artifacts" {
@@ -209,9 +189,8 @@ data "aws_iam_policy_document" "cb_assume" {
 }
 
 resource "aws_iam_role" "codebuild" {
-  name               = "${local.name}-codebuild"
+  name               = "${var.project_name}-codebuild"
   assume_role_policy = data.aws_iam_policy_document.cb_assume.json
-  tags               = local.tags
 }
 
 data "aws_iam_policy_document" "cb_inline" {
@@ -261,7 +240,7 @@ resource "aws_iam_role_policy" "codebuild_inline" {
 }
 
 resource "aws_codebuild_project" "build" {
-  name         = "${local.name}-build"
+  name         = "${var.project_name}-build"
   service_role = aws_iam_role.codebuild.arn
 
   artifacts { type = "CODEPIPELINE" }
@@ -274,7 +253,7 @@ resource "aws_codebuild_project" "build" {
 
     environment_variable {
       name  = "AWS_REGION"
-      value = var.region
+      value = var.aws_region
     }
 
     environment_variable {
@@ -293,17 +272,18 @@ resource "aws_codebuild_project" "build" {
     }
   }
 
-  source { type = "CODEPIPELINE" }
+  source {
+    type = "CODEPIPELINE"
+  }
 
   logs_config {
     cloudwatch_logs {
       status      = "ENABLED"
-      group_name  = "/codebuild/${local.name}"
+      group_name  = "/codebuild/${var.project_name}"
       stream_name = "build"
     }
   }
 
-  tags = local.tags
 }
 
 # -----------------------------
@@ -320,9 +300,8 @@ data "aws_iam_policy_document" "cp_assume" {
 }
 
 resource "aws_iam_role" "codepipeline" {
-  name               = "${local.name}-codepipeline"
+  name               = "${var.project_name}-codepipeline"
   assume_role_policy = data.aws_iam_policy_document.cp_assume.json
-  tags               = local.tags
 }
 
 # Final least-privilege policy for CodePipeline role (includes ECS tag permissions + cross-service reads)
@@ -455,7 +434,7 @@ resource "aws_iam_role_policy" "codepipeline_inline" {
 }
 
 resource "aws_codepipeline" "pipeline" {
-  name     = local.name
+  name     = var.project_name
   role_arn = aws_iam_role.codepipeline.arn
 
   artifact_store {
@@ -492,7 +471,8 @@ resource "aws_codepipeline" "pipeline" {
       input_artifacts  = ["source_output"]
       output_artifacts = ["build_output"]
       configuration = {
-        ProjectName = aws_codebuild_project.build.name
+        ProjectName       = aws_codebuild_project.build.name
+        BuildspecOverride = "2048-game/buildspec.yml"
       }
     }
   }
@@ -515,5 +495,4 @@ resource "aws_codepipeline" "pipeline" {
     }
   }
 
-  tags = local.tags
 }

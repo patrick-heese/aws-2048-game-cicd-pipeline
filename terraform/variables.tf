@@ -4,7 +4,7 @@ variable "project_name" {
   default = "aws-2048-cicd-pipeline"
 }
 
-variable "region" {
+variable "aws_region" {
   type    = string
   default = "us-east-1"
 }
